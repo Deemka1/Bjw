@@ -1,0 +1,535 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Bejeweled Twist</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            text-align: center;
+            background: linear-gradient(135deg, #0f0c29, #302b63, #24243e);
+            color: white;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            height: 100vh;
+            overflow: hidden;
+            touch-action: none;
+        }
+        h1 {
+            margin-top: 10px;
+            font-size: 28px;
+            background: linear-gradient(90deg, #f7971e, #ffd200);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            filter: drop-shadow(0 0 10px rgba(255,210,0,0.3));
+        }
+        .ui-panel {
+            margin: 8px;
+            font-size: 18px;
+            background: rgba(255,255,255,0.08);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 8px 25px;
+            border: 1px solid rgba(255,255,255,0.15);
+        }
+        .ui-panel span { font-weight: bold; color: #ffd200; }
+        #game-container {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+        }
+        canvas {
+            border-radius: 12px;
+            box-shadow: 0 0 40px rgba(100, 100, 255, 0.3), inset 0 0 40px rgba(0,0,0,0.2);
+            touch-action: none;
+            cursor: pointer;
+        }
+        .controls {
+            display: flex;
+            gap: 15px;
+            margin-top: 10px;
+        }
+        button {
+            padding: 10px 20px;
+            font-size: 14px;
+            cursor: pointer;
+            background: linear-gradient(135deg, #11998e, #38ef7d);
+            border: none;
+            color: white;
+            border-radius: 25px;
+            font-weight: bold;
+            box-shadow: 0 4px 15px rgba(56, 239, 125, 0.3);
+            transition: transform 0.15s, box-shadow 0.15s;
+        }
+        button:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(56, 239, 125, 0.5); }
+        button.rotate-left { background: linear-gradient(135deg, #667eea, #764ba2); }
+        button.rotate-right { background: linear-gradient(135deg, #f093fb, #f5576c); }
+        .info-panel { font-size: 12px; color: rgba(255,255,255,0.5); margin: 5px; max-width: 400px; }
+        #banner-ad {
+            width: 320px; height: 50px;
+            background: linear-gradient(90deg, #f7971e, #ffd200);
+            color: #333;
+            margin: 8px auto;
+            display: flex; align-items: center; justify-content: center;
+            font-weight: bold; border-radius: 8px;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <h1>💎 Bejeweled Twist</h1>
+    <div class="ui-panel">
+        Очки: <span id="score">0</span> &nbsp;|&nbsp; Ходы: <span id="moves">30</span> &nbsp;|&nbsp; Время: <span id="timer">0:00</span>
+    </div>
+    <div id="game-container">
+        <canvas id="gameCanvas" width="400" height="400"></canvas>
+        <div class="controls">
+            <button class="rotate-left" onclick="rotateBlock(-1)">↺ Против часовой</button>
+            <button class="rotate-right" onclick="rotateBlock(1)">По часовой ↻</button>
+        </div>
+    </div>
+    <div class="info-panel">
+        🖱️ Кликни на шарик → выбери 2×2 блок → вращай кнопками или клавишами A/D<br>
+        4 в ряд → Суперкамень | 5 в ряд → Мега-взрыв | L/T → Крест
+    </div>
+    <div id="banner-ad">[ РЕКЛАМНЫЙ БАННЕР 320×50 ]</div>
+
+    <script>
+    // ====== НАСТРОЙКИ ======
+    const COLS = 8, ROWS = 8, TILE = 50;
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+
+    let board = [], score = 0, moves = 30, startTime = Date.now();
+    let isProcessing = false;
+    let particles = [];
+    let selectedBlock = null; // {r, c} — верхний левый угол 2x2 блока
+
+    const BONUS_NONE = 0, BONUS_LINE_H = 1, BONUS_LINE_V = 2, BONUS_BOMB = 3, BONUS_COLOR = 4, BONUS_CROSS = 5;
+
+    const GEMS = [
+        { base: '#e74c3c', light: '#ff9a9a', dark: '#8b0000', glow: '#ff4444' },
+        { base: '#2ecc71', light: '#a8f0c8', dark: '#0a5c2a', glow: '#44ff88' },
+        { base: '#3498db', light: '#a0d4ff', dark: '#0a3d6b', glow: '#44aaff' },
+        { base: '#f39c12', light: '#ffe08a', dark: '#7a4e00', glow: '#ffcc00' },
+        { base: '#9b59b6', light: '#d9a8f0', dark: '#3c1053', glow: '#cc66ff' }
+    ];
+    const RAINBOW = ['#e74c3c','#f39c12','#f1c40f','#2ecc71','#3498db','#9b59b6'];
+
+    // ====== ЧАСТИЦЫ ======
+    class Particle {
+        constructor(x, y, color, big) {
+            this.x = x; this.y = y;
+            const speed = big ? 10 : 6;
+            const angle = Math.random() * Math.PI * 2;
+            const v = Math.random() * speed + 1;
+            this.vx = Math.cos(angle) * v;
+            this.vy = Math.sin(angle) * v - 2;
+            this.life = 1;
+            this.decay = 0.015 + Math.random() * 0.025;
+            this.size = (big ? 4 : 2) + Math.random() * (big ? 6 : 4);
+            this.color = color;
+        }
+        update() {
+            this.x += this.vx; this.y += this.vy;
+            this.vy += 0.12;
+            this.life -= this.decay;
+            this.size *= 0.98;
+        }
+        draw(c) {
+            c.save();
+            c.globalAlpha = Math.max(0, this.life);
+            c.shadowBlur = 8;
+            c.shadowColor = this.color;
+            c.fillStyle = this.color;
+            c.beginPath();
+            c.arc(this.x, this.y, Math.max(0.5, this.size), 0, Math.PI * 2);
+            c.fill();
+            c.restore();
+        }
+    }
+
+    function explode(x, y, colorIdx, big) {
+        const g = GEMS[colorIdx];
+        const n = big ? 25 : 12;
+        for (let i = 0; i < n; i++) {
+            particles.push(new Particle(x, y, g.base, big));
+            particles.push(new Particle(x, y, g.light, big));
+        }
+        if (big) for (let i = 0; i < 15; i++) particles.push(new Particle(x, y, '#fff', true));
+    }
+
+    // ====== РЕКЛАМА (мок) ======
+    function showInterstitialAd() {
+        alert("📺 МЕЖСТРАНИЧНАЯ РЕКЛАМА\n(Здесь будет полноэкранный баннер)");
+    }
+
+    // ====== ОТРИСОВКА ======
+    function roundRect(c, x, y, w, h, r) {
+        c.beginPath();
+        c.moveTo(x+r,y); c.lineTo(x+w-r,y);
+        c.quadraticCurveTo(x+w,y,x+w,y+r); c.lineTo(x+w,y+h-r);
+        c.quadraticCurveTo(x+w,y+h,x+w-r,y+h); c.lineTo(x+r,y+h);
+        c.quadraticCurveTo(x,y+h,x,y+h-r); c.lineTo(x,y+r);
+        c.quadraticCurveTo(x,y,x+r,y); c.closePath();
+    }
+
+    function drawBackground() {
+        const bg = ctx.createLinearGradient(0, 0, 0, canvas.height);
+        bg.addColorStop(0, '#1a1a3e'); bg.addColorStop(1, '#0d0d24');
+        ctx.fillStyle = bg;
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        for (let r = 0; r < ROWS; r++)
+            for (let c = 0; c < COLS; c++) {
+                ctx.fillStyle = (r+c)%2===0 ? 'rgba(255,255,255,0.04)' : 'rgba(255,255,255,0.015)';
+                roundRect(ctx, c*TILE+2, r*TILE+2, TILE-4, TILE-4, 8);
+                ctx.fill();
+            }
+    }
+
+    function drawGem(x, y, colorIdx, bonus, ts) {
+        const g = GEMS[colorIdx];
+        const R = TILE/2 - 5;
+
+        ctx.fillStyle = 'rgba(0,0,0,0.35)';
+        ctx.beginPath(); ctx.arc(x+2, y+3, R, 0, Math.PI*2); ctx.fill();
+
+        const sr = R;
+
+        if (bonus === BONUS_COLOR) {
+            for (let i = 0; i < 6; i++) {
+                const a1 = (i/6)*Math.PI*2 + ts*0.002;
+                const a2 = ((i+1)/6)*Math.PI*2 + ts*0.002;
+                ctx.fillStyle = RAINBOW[i];
+                ctx.beginPath(); ctx.moveTo(x,y); ctx.arc(x,y,sr,a1,a2); ctx.closePath(); ctx.fill();
+            }
+            const cg = ctx.createRadialGradient(x-sr*0.2, y-sr*0.2, 0, x, y, sr);
+            cg.addColorStop(0, 'rgba(255,255,255,0.7)');
+            cg.addColorStop(0.5, 'rgba(255,255,255,0.1)');
+            cg.addColorStop(1, 'rgba(0,0,0,0.2)');
+            ctx.fillStyle = cg;
+            ctx.beginPath(); ctx.arc(x,y,sr,0,Math.PI*2); ctx.fill();
+        } else {
+            const grad = ctx.createRadialGradient(x - sr*0.3, y - sr*0.35, sr*0.05, x, y, sr);
+            grad.addColorStop(0, g.light);
+            grad.addColorStop(0.55, g.base);
+            grad.addColorStop(1, g.dark);
+            ctx.fillStyle = grad;
+            ctx.beginPath(); ctx.arc(x, y, sr, 0, Math.PI*2); ctx.fill();
+
+            ctx.fillStyle = 'rgba(255,255,255,0.45)';
+            ctx.beginPath(); ctx.ellipse(x - sr*0.22, y - sr*0.28, sr*0.32, sr*0.22, -0.5, 0, Math.PI*2); ctx.fill();
+        }
+
+        if (bonus !== BONUS_NONE && bonus !== BONUS_COLOR) {
+            ctx.save();
+            ctx.shadowBlur = 12; ctx.shadowColor = '#fff';
+            ctx.strokeStyle = '#fff'; ctx.lineWidth = 2.5; ctx.lineCap = 'round';
+            const p = sr * 0.7;
+            ctx.beginPath();
+            if (bonus === BONUS_LINE_H) {
+                ctx.moveTo(x-p, y); ctx.lineTo(x+p, y);
+            } else if (bonus === BONUS_LINE_V) {
+                ctx.moveTo(x, y-p); ctx.lineTo(x, y+p);
+            } else if (bonus === BONUS_BOMB) {
+                const spikes = 8, outer = sr*0.75, inner = sr*0.35;
+                for (let i = 0; i < spikes*2; i++) {
+                    const rad = i%2===0 ? outer : inner;
+                    const a = (i/(spikes*2))*Math.PI*2 - Math.PI/2;
+                    const px = x+Math.cos(a)*rad, py = y+Math.sin(a)*rad;
+                    i===0 ? ctx.moveTo(px,py) : ctx.lineTo(px,py);
+                }
+                ctx.closePath();
+            } else if (bonus === BONUS_CROSS) {
+                ctx.moveTo(x-p, y-p); ctx.lineTo(x+p, y+p);
+                ctx.moveTo(x+p, y-p); ctx.lineTo(x-p, y+p);
+            }
+            ctx.stroke();
+            ctx.restore();
+        }
+
+        if (bonus !== BONUS_NONE) {
+            const pulse = 0.3 + Math.sin(ts * 0.004) * 0.15;
+            ctx.save();
+            ctx.globalAlpha = pulse;
+            ctx.shadowBlur = 20;
+            ctx.shadowColor = bonus === BONUS_COLOR ? '#fff' : g.glow;
+            ctx.strokeStyle = bonus === BONUS_COLOR ? '#fff' : g.glow;
+            ctx.lineWidth = 2;
+            ctx.beginPath(); ctx.arc(x, y, sr + 3, 0, Math.PI*2); ctx.stroke();
+            ctx.restore();
+        }
+    }
+
+    function drawSelectedBlock(ts) {
+        if (!selectedBlock) return;
+        const { r, c } = selectedBlock;
+        const x = c * TILE, y = r * TILE;
+        const pulse = 0.5 + Math.sin(ts * 0.005) * 0.2;
+        
+        ctx.save();
+        ctx.strokeStyle = `rgba(255, 210, 0, ${pulse})`;
+        ctx.lineWidth = 3;
+        ctx.shadowBlur = 15;
+        ctx.shadowColor = '#ffd200';
+        roundRect(ctx, x + 2, y + 2, TILE * 2 - 4, TILE * 2 - 4, 10);
+        ctx.stroke();
+        ctx.restore();
+    }
+
+    function drawBoard(ts) {
+        drawBackground();
+        for (let r = 0; r < ROWS; r++)
+            for (let c = 0; c < COLS; c++) {
+                const t = board[r][c];
+                if (t.color !== -1) {
+                    const x = c*TILE + TILE/2, y = r*TILE + TILE/2;
+                    drawGem(x, y, t.color, t.bonus, ts);
+                }
+            }
+        drawSelectedBlock(ts);
+    }
+
+    // ====== GAME LOOP ======
+    function gameLoop(ts) {
+        particles = particles.filter(p => p.life > 0);
+        particles.forEach(p => p.update());
+        drawBoard(ts);
+        particles.forEach(p => p.draw(ctx));
+        
+        // Обновляем таймер
+        const elapsed = Math.floor((Date.now() - startTime) / 1000);
+        const mins = Math.floor(elapsed / 60);
+        const secs = elapsed % 60;
+        document.getElementById('timer').textContent = `${mins}:${secs.toString().padStart(2, '0')}`;
+        
+        requestAnimationFrame(gameLoop);
+    }
+
+    // ====== ЛОГИКА ======
+    function initBoard() {
+        board = [];
+        for (let r = 0; r < ROWS; r++) {
+            board[r] = [];
+            for (let c = 0; c < COLS; c++) {
+                let color;
+                do { color = Math.floor(Math.random()*GEMS.length); } while (
+                    (c>=2 && board[r][c-1]?.color===color && board[r][c-2]?.color===color) ||
+                    (r>=2 && board[r-1]?.[c]?.color===color && board[r-2]?.[c]?.color===color)
+                );
+                board[r][c] = { color, bonus: BONUS_NONE };
+            }
+        }
+    }
+
+    function updateUI() {
+        document.getElementById('score').innerText = score;
+        document.getElementById('moves').innerText = moves;
+        if (moves <= 0) setTimeout(() => {
+            showInterstitialAd();
+            alert('Игра окончена! Счёт: ' + score);
+            score = 0; moves = 30; startTime = Date.now(); initBoard();
+        }, 100);
+    }
+
+    // ====== ВЫБОР БЛОКА 2x2 ======
+    canvas.addEventListener('click', e => {
+        if (isProcessing) return;
+        const rect = canvas.getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        const y = e.clientY - rect.top;
+        const c = Math.floor(x / TILE);
+        const r = Math.floor(y / TILE);
+
+        // Определяем, какой из 4 возможных блоков 2x2 содержит этот шарик
+        // Выбираем блок, где этот шарик — верхний левый угол (или ближайший)
+        let blockR = r, blockC = c;
+        if (r === ROWS - 1) blockR = r - 1;
+        if (c === COLS - 1) blockC = c - 1;
+
+        selectedBlock = { r: blockR, c: blockC };
+    });
+
+    // ====== ВРАЩЕНИЕ БЛОКА ======
+    function rotateBlock(direction) {
+        if (isProcessing || !selectedBlock) return;
+        const { r, c } = selectedBlock;
+
+        if (r < 0 || r >= ROWS - 1 || c < 0 || c >= COLS - 1) return;
+
+        isProcessing = true;
+
+        // Сохраняем 4 угла
+        const tl = board[r][c];
+        const tr = board[r][c+1];
+        const br = board[r+1][c+1];
+        const bl = board[r+1][c];
+
+        // Вращаем
+        if (direction === 1) { // по часовой
+            board[r][c] = bl;
+            board[r][c+1] = tl;
+            board[r+1][c+1] = tr;
+            board[r+1][c] = br;
+        } else { // против часовой
+            board[r][c] = tr;
+            board[r][c+1] = br;
+            board[r+1][c+1] = bl;
+            board[r+1][c] = tl;
+        }
+
+        moves--;
+        updateUI();
+
+        setTimeout(async () => {
+            await processMatches();
+            isProcessing = false;
+        }, 100);
+    }
+
+    // Клавиши A/D для вращения
+    document.addEventListener('keydown', e => {
+        if (e.key === 'a' || e.key === 'A' || e.key === 'ф' || e.key === 'Ф') rotateBlock(-1);
+        if (e.key === 'd' || e.key === 'D' || e.key === 'в' || e.key === 'В') rotateBlock(1);
+    });
+
+    // ====== ПОИСК СОВПАДЕНИЙ ======
+    function findMatches() {
+        let matches = new Set(), groups = [];
+        for (let r = 0; r < ROWS; r++) {
+            let c = 0;
+            while (c < COLS) {
+                if (board[r][c].color !== -1) {
+                    const col = board[r][c].color; let s = c;
+                    while (c < COLS && board[r][c].color === col) c++;
+                    if (c - s >= 3) {
+                        let g = [];
+                        for (let i = s; i < c; i++) { matches.add(`${r},${i}`); g.push({r,c:i}); }
+                        groups.push({ tiles: g, dir: 'h', len: c-s });
+                    }
+                } else c++;
+            }
+        }
+        for (let c = 0; c < COLS; c++) {
+            let r = 0;
+            while (r < ROWS) {
+                if (board[r][c].color !== -1) {
+                    const col = board[r][c].color; let s = r;
+                    while (r < ROWS && board[r][c].color === col) r++;
+                    if (r - s >= 3) {
+                        let g = [];
+                        for (let i = s; i < r; i++) { matches.add(`${i},${c}`); g.push({r:i,c}); }
+                        groups.push({ tiles: g, dir: 'v', len: r-s });
+                    }
+                } else r++;
+            }
+        }
+        return { matches: [...matches].map(m=>m.split(',').map(Number)), groups };
+    }
+
+    function determineBonuses(groups) {
+        let intersections = new Map();
+        for (let i = 0; i < groups.length; i++)
+            for (let j = i+1; j < groups.length; j++)
+                if (groups[i].dir !== groups[j].dir)
+                    for (let t1 of groups[i].tiles)
+                        for (let t2 of groups[j].tiles)
+                            if (t1.r===t2.r && t1.c===t2.c)
+                                intersections.set(`${t1.r},${t1.c}`, { g1: groups[i], g2: groups[j], pos: t1 });
+        let bonuses = [];
+        for (let [, inter] of intersections) {
+            if (inter.g1.len + inter.g2.len - 1 >= 5)
+                bonuses.push({ pos: inter.pos, type: BONUS_CROSS, color: board[inter.pos.r][inter.pos.c].color });
+        }
+        for (let g of groups) {
+            let used = false;
+            for (let [, inter] of intersections) if (inter.g1===g || inter.g2===g) { used=true; break; }
+            if (!used) {
+                if (g.len >= 5) bonuses.push({ pos: g.tiles[2], type: BONUS_COLOR, color: board[g.tiles[0].r][g.tiles[0].c].color });
+                else if (g.len === 4) bonuses.push({ pos: g.tiles[1], type: g.dir==='h'?BONUS_LINE_H:BONUS_LINE_V, color: board[g.tiles[0].r][g.tiles[0].c].color });
+            }
+        }
+        return bonuses;
+    }
+
+    async function activateBonus(r, c) {
+        const t = board[r][c]; let rem = new Set();
+        if (t.bonus === BONUS_LINE_H) for (let i=0;i<COLS;i++) rem.add(`${r},${i}`);
+        else if (t.bonus === BONUS_LINE_V) for (let i=0;i<ROWS;i++) rem.add(`${i},${c}`);
+        else if (t.bonus === BONUS_BOMB) for (let dr=-1;dr<=1;dr++) for (let dc=-1;dc<=1;dc++) {
+            const nr=r+dr, nc=c+dc; if (nr>=0&&nr<ROWS&&nc>=0&&nc<COLS) rem.add(`${nr},${nc}`);
+        }
+        else if (t.bonus === BONUS_CROSS) {
+            for (let i=0;i<COLS;i++) rem.add(`${r},${i}`);
+            for (let i=0;i<ROWS;i++) rem.add(`${i},${c}`);
+            for (let dr=-2;dr<=2;dr++) for (let dc=-2;dc<=2;dc++) {
+                if (Math.abs(dr) === Math.abs(dc)) {
+                    const nr=r+dr, nc=c+dc;
+                    if (nr>=0&&nr<ROWS&&nc>=0&&nc<COLS) rem.add(`${nr},${nc}`);
+                }
+            }
+        }
+        else if (t.bonus === BONUS_COLOR) {
+            const tc = t.color;
+            for (let i=0;i<ROWS;i++) for (let j=0;j<COLS;j++) if (board[i][j].color===tc) rem.add(`${i},${j}`);
+        }
+        explode(c*TILE+TILE/2, r*TILE+TILE/2, t.color >= 0 ? t.color : 0, true);
+        for (let key of rem) {
+            const [tr,tc] = key.split(',').map(Number);
+            if (board[tr][tc].bonus !== BONUS_NONE) {
+                board[tr][tc].bonus = BONUS_NONE;
+                const sub = await activateBonus(tr, tc);
+                for (let sk of sub) rem.add(sk);
+            }
+        }
+        return rem;
+    }
+
+    async function processMatches() {
+        let res = findMatches();
+        while (res.matches.length > 0) {
+            let bonuses = determineBonuses(res.groups);
+            let bonusAct = new Set();
+            for (let [r,c] of res.matches)
+                if (board[r][c].bonus !== BONUS_NONE) {
+                    const act = await activateBonus(r,c);
+                    for (let k of act) bonusAct.add(k);
+                }
+            let all = new Set();
+            for (let [r,c] of res.matches) all.add(`${r},${c}`);
+            for (let k of bonusAct) all.add(k);
+            for (let b of bonuses) {
+                const k = `${b.pos.r},${b.pos.c}`;
+                if (all.has(k)) { board[b.pos.r][b.pos.c] = { color: b.color, bonus: b.type }; all.delete(k); }
+            }
+            for (let k of all) {
+                const [r,c] = k.split(',').map(Number);
+                explode(c*TILE+TILE/2, r*TILE+TILE/2, board[r][c].color, false);
+                board[r][c] = { color: -1, bonus: BONUS_NONE };
+                score += 10;
+            }
+            updateUI();
+            await sleep(250);
+            for (let c=0;c<COLS;c++) { let e=ROWS-1; for (let r=ROWS-1;r>=0;r--) if (board[r][c].color!==-1) { board[e][c]=board[r][c]; if(e!==r) board[r][c]={color:-1,bonus:BONUS_NONE}; e--; } }
+            for (let c=0;c<COLS;c++) for (let r=0;r<ROWS;r++) if (board[r][c].color===-1) board[r][c]={color:Math.floor(Math.random()*GEMS.length),bonus:BONUS_NONE};
+            await sleep(250);
+            res = findMatches();
+        }
+        if (score > 0 && score % 500 === 0) showInterstitialAd();
+    }
+
+    function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+    // ====== СТАРТ ======
+    initBoard();
+    updateUI();
+    requestAnimationFrame(gameLoop);
+    </script>
+</body>
+</html>
